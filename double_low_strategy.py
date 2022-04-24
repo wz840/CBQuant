@@ -80,7 +80,7 @@ def complete_with_market(ori_code, market):
             else:
                 return '00' + ori_code + '.SZ'
         else:
-            return ori_code + 'SZ'
+            return ori_code + '.SZ'
 
 
 def get_mapping(df: pd.DataFrame):
@@ -99,7 +99,7 @@ def calculate_premium(bond_df: pd.DataFrame, bond_equity_mapping: pd.DataFrame, 
     :param face_value: face value of bond - default=100
     :return: consolidated data frame with all calculated premium for all trading days
     """
-    # merge two dfs to collect stock symbol and adjusted close price for a particular trading day
+    # merge two dfs to collect stock symbol and adjusted close price for a particular trading day - vlookup
     bond_df = pd.merge(bond_df, bond_equity_mapping.loc[:, ['SECUCODE', 'EQUITY_SECUCODE']], how='left', on='SECUCODE')
     bond_df = pd.merge(bond_df, equity_df, how='left', left_on=['EQUITY_SECUCODE', 'TRADEDATE'], right_on=['S_INFO_WINDCODE', 'TRADE_DT'])
 
