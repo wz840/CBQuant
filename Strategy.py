@@ -19,9 +19,11 @@ class Strategy(metaclass=ABCMeta):
 
 def calculate_bond_premium(bond_close: float, face_value: int):
     premium = bond_close / face_value - 1
-    return float('{:.3f}'.format(premium))
+    return float('{:.4f}'.format(premium))
 
 
 def calculate_convert_premium(bond_close: float, stock_price: float, strike_price: float, face_value: int):
     premium = ((bond_close * strike_price) / (face_value * stock_price)) - 1
-    return float('{:.3f}'.format(premium))
+    return float('{:.4f}'.format(premium))
+
+
