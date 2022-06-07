@@ -56,15 +56,16 @@ def read_csv(file, date_col, index_list, data_type_map, col_used=[], clean_funct
     return data_frame
 
 
-def read_excel(file, data_type_map, clean_function=None):
+def read_excel(file, data_type_map, date_col=None, clean_function=None):
     """
     Read Excel function
+    :param date_col: date column
     :param file: absolute file path
     :param data_type_map: data type map
     :param clean_function: the data cleansing function, default None - No cleansing needed
     :return:
     """
-    data_framework = pd.read_excel(file, dtype=data_type_map, header=0)
+    data_framework = pd.read_excel(file, dtype=data_type_map, parse_dates=[date_col], header=0)
     if clean_function:
         clean_function(data_framework)
     return data_framework
@@ -107,6 +108,7 @@ def calculate_premium(bond_df: pd.DataFrame, bond_equity_mapping: pd.DataFrame, 
                       beta_df: pd.DataFrame, face_value=100):
     """
     Calculate premium of bond and equity
+    :param beta_df: beta data frame
     :param bond_df: bond data with end date (baseline as corresponding equity)
     :param bond_equity_mapping:  bond and equity symbol mapping
     :param equity_df: equity data with start date (baseline as corresponding bond)
@@ -130,7 +132,13 @@ def calculate_premium(bond_df: pd.DataFrame, bond_equity_mapping: pd.DataFrame, 
     bond_df['PREMIUM_INDEX'] = bond_df.apply(lambda row: round(row['BOND_PREMIUM'] + row['CONVERT_PREMIUM'], 4), axis=1)
     bond_df = bond_df.drop(bond_df[(bond_df['VOLUMN'] == 0)].index)  # 剔除交易量为0的记录
 
+    beta_df['TRADE_MONTH_BETA'] = beta_df['TRADEDATE'].apply(lambda x: x.replace('-', '')[0:6])
+    bond_df['TRADE_MONTH'] = bond_df['TRADEDATE'].apply(lambda x: x.strftime('%Y%m'))
+    print(beta_df.head(10))
+    bond_df = pd.merge(bond_df, beta_df.loc[:, ['SECUCODE', 'TRADE_MONTH_BETA', 'BETA_INDEX']],
+                       how='left', left_on=['SECUCODE', 'TRADE_MONTH'], right_on=['SECUCODE', 'TRADE_MONTH_BETA'])
     print("Data processing finished.\n")
+    print(bond_df.head(10))
     return bond_df
 
 
@@ -149,6 +157,11 @@ def truncate_by_date(filter_function, df: pd.DataFrame):
 def start_date_filter(date_str: str, date_col: str):
     s_date = datetime.datetime.strptime(date_str, '%Y%m%d').date()
     return lambda x: x[date_col].dt.date >= s_date
+
+def start_end_date_filter(start_date_str: str, end_date_str: str, date_col: str):
+    s_date = datetime.datetime.strptime(start_date_str, '%Y%m%d').date()
+    e_date = datetime.datetime.strptime(end_date_str, '%Y%m%d').date()
+    return lambda x: (x[date_col].dt.date <= e_date) & (x[date_col].dt.date >= s_date)
 
 
 def end_date_filter(date_str: str, date_col: str):
@@ -403,24 +416,27 @@ if __name__ == '__main__':
     print("[Start Processing]")
     print("Cleaning Market Data...")
 
-    """
-    cb_df = truncate_by_date(end_date_filter('20201009', 'TRADEDATE'), read_csv('data/cbData.csv',  # file path
-                                                                                'TRADEDATE',  # date column
-                                                                                None,  # compound index column
-                                                                                {'SECUCODE': str,
-                                                                                 'TRADEDATE': str}))  # column data type
+    cb_df = truncate_by_date(start_end_date_filter('20180109', '20201009', 'TRADEDATE'), read_csv('data/cbData.csv',  # file path
+                                                                                                  'TRADEDATE',  # date column
+                                                                                                  None,  # compound index column
+                                                                                                  {'SECUCODE': str, 'TRADEDATE': str}))  # column data type
+    print(cb_df.head(10))
     mapping_df = read_excel('data/announcement.xlsx',
                             {'SECUCODE': str, 'SECUMARKET': int, 'EQUITY_SECUCODE': str, 'EQUITY_SECUMARKET': int},
+                            'MATURITYDATE',
                             # column data type
                             mapping_cleansing)  # data cleansing
 
-    print(".......")
-    stock_df = truncate_by_date(start_date_filter('20171231', 'TRADE_DT'),
+    print(mapping_df.head(10))
+    stock_df = truncate_by_date(start_end_date_filter('20180109', '20201009', 'TRADE_DT'),
                                 read_csv('data/AShareEODPrices.csv',  # file path
                                          'TRADE_DT',  # date column
                                          None,  # compound index column
                                          {'S_INFO_WINDCODE': str, 'TRADE_DT': str},  # column data type
                                          ['S_INFO_WINDCODE', 'TRADE_DT', 'S_DQ_CLOSE']))  # column needed
+    print(stock_df.head(10))
+    beta_df = read_excel('data/beta/beta_strategy.xlsx', {'SECUCODE': str, 'TRADEDATE': str}, 'TRADEDATE')
+    print(beta_df.head(10))
 
     premium_df = calculate_premium(cb_df, mapping_df, stock_df, beta_df)
     output_results(premium_df, '', 'premium')
@@ -443,3 +459,4 @@ if __name__ == '__main__':
         output_results(pfNav_df, 'mode2', 'pf_nav')
 
     print("Output daily NAV file: pf_nav.csv successfully.")
+    """
