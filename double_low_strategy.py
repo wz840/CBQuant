@@ -104,7 +104,7 @@ def get_mapping(df: pd.DataFrame):
 
 
 def calculate_premium(bond_df: pd.DataFrame, bond_equity_mapping: pd.DataFrame, equity_df: pd.DataFrame,
-                      face_value=100):
+                      beta_df: pd.DataFrame, face_value=100):
     """
     Calculate premium of bond and equity
     :param bond_df: bond data with end date (baseline as corresponding equity)
@@ -128,6 +128,7 @@ def calculate_premium(bond_df: pd.DataFrame, bond_equity_mapping: pd.DataFrame, 
     # bond_df['PREMIUM_INDEX'] = bond_df.apply(lambda row: format(row['BOND_PREMIUM'] + row['CONVERT_PREMIUM'],
     # '.2%'), axis=1)
     bond_df['PREMIUM_INDEX'] = bond_df.apply(lambda row: round(row['BOND_PREMIUM'] + row['CONVERT_PREMIUM'], 4), axis=1)
+    bond_df = bond_df.drop(bond_df[(bond_df['VOLUMN'] == 0)].index)  # 剔除交易量为0的记录
 
     print("Data processing finished.\n")
     return bond_df
@@ -165,7 +166,7 @@ def trade_marked(premium_index_df: pd.DataFrame, number: int, interval_days: int
     :return: data framework
     """
 
-    print("Picking up daily target stocks from 2012-12-31...")
+    print("Picking up daily target stocks from 2018-01-01...")
     print("     Trading interval = %d DAYS" % interval_days)
     print("     Maximum holdings = %d STOCKS" % number)
     print("     TRADEMODE = MODE %d \n" % TRADEMODE)
@@ -209,34 +210,38 @@ def trade_marked(premium_index_df: pd.DataFrame, number: int, interval_days: int
             daily_buy_list[j] = daily_premium_list[j]
             daily_holding_list[j] = daily_premium_list[j]
         elif (j % interval_days) != 0:  # 赎回日当天可以卖出，不可买入
-            daily_holding_list[j] = daily_holding_list[j - 1]  # 继承承T-1日的持仓
+            daily_holding_list[j] = daily_holding_list[j - 1]  # 继承T-1日的持仓
             daily_sell_list[j] = list(set(daily_holding_list[j]).difference(
                 set((daily_full_list[j + 1]))))  # 非换仓日，检查持仓如果不在明天Full list里，则不能再持有下去，则卖出
             daily_buy_list[j] = []  # 非换仓日，不做买入交易
             daily_holding_list[j] = list(set(daily_holding_list[j] + daily_buy_list[j]) - set(daily_sell_list[j]))
+
         else:
             # TRADEMODE 1 换仓日增量买入
             if TRADEMODE == 1:
                 daily_holding_list[j] = daily_holding_list[j - 1]  # 继承承T-1日的持仓
-                daily_sell_list[j] = list(set(daily_holding_list[j]).difference(set((daily_premium_list[j])))) + list(
-                    set(daily_holding_list[j]).difference(
-                        set((daily_full_list[j + 1]))))  # 换仓日，检查持仓，如果今天不在premium list里，或者不在明天Full List里，则卖出
                 daily_buy_list[j] = list(
-                    set(daily_premium_list[j]).difference(set((daily_holding_list[j]))))  # 换仓日，买入premium list里里没有的
+                    set(daily_premium_list[j]).difference(set(daily_holding_list[j])) - set(daily_premium_list[j]).
+                    difference(set(daily_full_list[j + 1])))  # 换仓日，买入premium list里里没有的
+                daily_sell_list[j] = list(set(daily_holding_list[j]).difference(set(daily_premium_list[j]))) + list(
+                    set(daily_holding_list[j]).difference(
+                        set(daily_full_list[j + 1])))  # 换仓日，检查持仓，如果今天不在premium list里，或者不在明天Full List里，则卖出
                 daily_holding_list[j] = list(set(daily_holding_list[j] + daily_buy_list[j]) - set(daily_sell_list[j]))
+
             # TRADEMODE 2 换仓日全量卖出后rebalance买入
             else:
                 daily_holding_list[j] = daily_holding_list[j - 1]  # 继承承T-1日的持仓
                 daily_sell_list[j] = daily_holding_list[j]  # 换仓日，持仓全部卖出
-                daily_buy_list[j] = list(set(daily_premium_list[j]))  # 换层日，重新全部买入
+                daily_buy_list[j] = list(set(daily_premium_list[j]) - set(daily_premium_list[j]).difference(
+                    set(daily_full_list[j + 1])))  # 换层日，重新全部买入
                 daily_holding_list[j] = daily_buy_list[j]
 
-        # List转为Set,计算holding list
+        # List转为Set
         daily_buy_set = set(daily_buy_list[j])
         daily_sell_set = set(daily_sell_list[j])
         daily_holding_set = set(daily_holding_list[j])
         print("         Marking stocks of %s" % (date_list[j]))
-        # 每日更新买入状态（只在换仓日）
+        # 每日更新买入状态(只在换仓日)
         for buy_stock in daily_buy_set:
             temp_buy_df = premium_index_df[
                 (premium_index_df["TRADE_DT"] == date_list[j]) & (premium_index_df["SECUCODE"] == buy_stock)]
@@ -270,7 +275,7 @@ def trade_marked(premium_index_df: pd.DataFrame, number: int, interval_days: int
     return trade_marked_df
 
 
-def equal_value_trade(trade_marked_df: pd.DataFrame, initial_cash: float):
+def equal_value_trade(trade_marked_df: pd.DataFrame, initial_cash: float, fee_rate: float):
     # 采用“等价值”的策略执行交易,并计算输出净值 (允许买碎股)
     # :param daily_trade_df:每次换仓日交易列表,dataframe
     # :param number:初始投入金额,float
@@ -302,6 +307,7 @@ def equal_value_trade(trade_marked_df: pd.DataFrame, initial_cash: float):
         # 首日买入
         if i == 0:
             count = int(group["BUY_MARK"].count())
+            cash_value[i] = float(cash_value[i] * (1 - fee_rate))  # 扣除交易费
             buy_cash = float(cash_value[i] / count)
             for index, row in group.iterrows():
                 if row['BUY_MARK'] == 1 or row['BUY_MARK'] == '1':
@@ -325,8 +331,7 @@ def equal_value_trade(trade_marked_df: pd.DataFrame, initial_cash: float):
                 for index, row in group.iterrows():
                     if ((row['HOLDINGS'] == 1 or row['HOLDINGS'] == '1') and not (
                             row['BUY_MARK'] == 1 or row['BUY_MARK'] == '1')):
-                        trade_marked_df['HLD_AMT'][index] = \
-                            stock_holdings_df[stock_holdings_df['SECUCODE'] == str(row['SECUCODE'])]['HLD_AMT'].values
+                        trade_marked_df['HLD_AMT'][index] = stock_holdings_df[stock_holdings_df['SECUCODE'] == str(row['SECUCODE'])]['HLD_AMT'].values
                         stock_holdings_df.loc[
                             stock_holdings_df[stock_holdings_df['SECUCODE'] == str(row['SECUCODE'])].index[
                                 0], 'PRICE'] = trade_marked_df['CLOSE'][index]
@@ -337,6 +342,7 @@ def equal_value_trade(trade_marked_df: pd.DataFrame, initial_cash: float):
                     if row['SELL_MARK'] == 1 or row['SELL_MARK'] == '1':
                         hld_amt = float(
                             stock_holdings_df[stock_holdings_df['SECUCODE'] == str(row['SECUCODE'])]['HLD_AMT'].values)
+                        # 卖出不涉及交易费
                         cash_value[i] = round(cash_value[i] + (row['CLOSE'] * hld_amt), 2)
                         # 在两张表里的持仓数据清0
                         trade_marked_df['HLD_AMT'][index] = 0
@@ -347,6 +353,7 @@ def equal_value_trade(trade_marked_df: pd.DataFrame, initial_cash: float):
             # 再执行买入操作
             if group["BUY_MARK"].count() != 0:
                 count = int(group["BUY_MARK"].count())
+                cash_value[i] = float(cash_value[i] * (1 - fee_rate))  # 扣除交易费
                 buy_cash = float(cash_value[i] / count)
                 for index, row in group.iterrows():
                     if row['BUY_MARK'] == 1 or row['BUY_MARK'] == '1':
@@ -363,7 +370,7 @@ def equal_value_trade(trade_marked_df: pd.DataFrame, initial_cash: float):
         stock_holdings_df.dropna(how="any", inplace=True)
         stock_holdings_df.reset_index(drop=True, inplace=True)
 
-        print("Stock Holdings List on %s：" % (name))
+        print("Stock Holdings List on %s：" % name)
         print(stock_holdings_df)
         stock_set['subsum'] = stock_holdings_df.apply(lambda row: round(row['PRICE'] * row['HLD_AMT'], 2), axis=1)
         stock_value[i] = round(stock_set['subsum'].sum(), 2)
@@ -389,12 +396,14 @@ def equal_value_trade(trade_marked_df: pd.DataFrame, initial_cash: float):
 if __name__ == '__main__':
     HOLDING_AMOUNT = 20  # 选股个数
     INTERVAL_DAYS = 20  # 换仓日间隔（交易日）
-    INITIAL_ASSET = 10000  # 初始资金
+    INITIAL_ASSET = 100000  # 初始资金
     TRADEMODE = 1  # 交易模式
+    FEE_RATE = 0.0002  # 交易费率
 
     print("[Start Processing]")
     print("Cleaning Market Data...")
 
+    """
     cb_df = truncate_by_date(end_date_filter('20201009', 'TRADEDATE'), read_csv('data/cbData.csv',  # file path
                                                                                 'TRADEDATE',  # date column
                                                                                 None,  # compound index column
@@ -406,30 +415,31 @@ if __name__ == '__main__':
                             mapping_cleansing)  # data cleansing
 
     print(".......")
-    stock_df = truncate_by_date(start_date_filter('20121231', 'TRADE_DT'),
+    stock_df = truncate_by_date(start_date_filter('20171231', 'TRADE_DT'),
                                 read_csv('data/AShareEODPrices.csv',  # file path
                                          'TRADE_DT',  # date column
                                          None,  # compound index column
                                          {'S_INFO_WINDCODE': str, 'TRADE_DT': str},  # column data type
                                          ['S_INFO_WINDCODE', 'TRADE_DT', 'S_DQ_CLOSE']))  # column needed
 
-    premium_df = calculate_premium(cb_df, mapping_df, stock_df)
-    # premium_df = pd.read_csv('results/premium.csv')
+    premium_df = calculate_premium(cb_df, mapping_df, stock_df, beta_df)
     output_results(premium_df, '', 'premium')
+    """
+    premium_df = pd.read_csv('results/premium.csv')
 
     if TRADEMODE == 1:
         tradeMarked_df = trade_marked(premium_df, HOLDING_AMOUNT, INTERVAL_DAYS, TRADEMODE)
         # tradeMarked_df = pd.read_csv('results/mode1/trade_marked.csv')
-
-        pfNav_df = equal_value_trade(tradeMarked_df, INITIAL_ASSET)
         output_results(tradeMarked_df, 'mode1', 'trade_marked')
+
+        pfNav_df = equal_value_trade(tradeMarked_df, INITIAL_ASSET, FEE_RATE)
         output_results(pfNav_df, 'mode1', 'pf_nav')
     else:
         tradeMarked_df = trade_marked(premium_df, HOLDING_AMOUNT, INTERVAL_DAYS, TRADEMODE)
         # tradeMarked_df = pd.read_csv('results/mode2/trade_marked.csv')
-
-        pfNav_df = equal_value_trade(tradeMarked_df, INITIAL_ASSET)
         output_results(tradeMarked_df, 'mode2', 'trade_marked')
+
+        pfNav_df = equal_value_trade(tradeMarked_df, INITIAL_ASSET, FEE_RATE)
         output_results(pfNav_df, 'mode2', 'pf_nav')
 
     print("Output daily NAV file: pf_nav.csv successfully.")
